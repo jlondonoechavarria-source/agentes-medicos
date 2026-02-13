@@ -1,0 +1,190 @@
+// ============================================================
+// Definición de Tools (herramientas) para Claude
+// Estas son las ACCIONES que el agente puede ejecutar:
+// - Revisar disponibilidad de horarios
+// - Crear, cancelar, reagendar citas
+// - Ver citas del paciente
+// - Escalar a humano
+// - Agregar a lista de espera
+//
+// Claude decide CUÁNDO usar cada tool basado en la conversación.
+// Nosotros definimos QUÉ parámetros necesita cada una.
+// ============================================================
+
+import type { Tool } from '@anthropic-ai/sdk/resources/messages'
+
+export const agentTools: Tool[] = [
+  {
+    name: 'check_availability',
+    description:
+      'Consulta los horarios disponibles de un doctor para una fecha específica. ' +
+      'Úsala cuando el paciente quiere agendar y necesitas mostrarle opciones. ' +
+      'Si no hay disponibilidad, sugiere al paciente unirse a la lista de espera.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        doctor_id: {
+          type: 'string',
+          description: 'ID UUID del doctor',
+        },
+        preferred_date: {
+          type: 'string',
+          description: 'Fecha preferida en formato YYYY-MM-DD. Si no la da, usa la fecha de hoy.',
+        },
+        preferred_time: {
+          type: 'string',
+          description: 'Hora preferida en formato HH:MM (24h). Opcional.',
+        },
+      },
+      required: ['doctor_id'],
+    },
+  },
+  {
+    name: 'create_appointment',
+    description:
+      'Crea una cita nueva. SOLO usar DESPUÉS de que el paciente confirme fecha y hora. ' +
+      'NUNCA agendar sin confirmación explícita del paciente. ' +
+      'Ejemplo: paciente dice "sí, dale" o "perfecto, agéndame".',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        doctor_id: {
+          type: 'string',
+          description: 'ID UUID del doctor',
+        },
+        patient_name: {
+          type: 'string',
+          description: 'Nombre completo del paciente',
+        },
+        patient_phone: {
+          type: 'string',
+          description: 'Teléfono del paciente con código de país (ej: +573101112233)',
+        },
+        starts_at: {
+          type: 'string',
+          description: 'Fecha y hora de inicio en formato ISO 8601 con timezone America/Bogota (ej: 2026-02-15T14:00:00-05:00)',
+        },
+        reason: {
+          type: 'string',
+          description: 'Motivo de la consulta (opcional)',
+        },
+      },
+      required: ['doctor_id', 'patient_name', 'patient_phone', 'starts_at'],
+    },
+  },
+  {
+    name: 'get_patient_appointments',
+    description:
+      'Obtiene las citas futuras (confirmadas) de un paciente. ' +
+      'Úsala cuando el paciente pregunta por sus citas o quiere cancelar/reagendar.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        patient_phone: {
+          type: 'string',
+          description: 'Teléfono del paciente con código de país (ej: +573101112233)',
+        },
+      },
+      required: ['patient_phone'],
+    },
+  },
+  {
+    name: 'cancel_appointment',
+    description:
+      'Cancela una cita existente. Pedir confirmación al paciente antes de cancelar. ' +
+      'Después de cancelar, ofrecer reagendar.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        appointment_id: {
+          type: 'string',
+          description: 'ID UUID de la cita a cancelar',
+        },
+        reason: {
+          type: 'string',
+          description: 'Motivo de la cancelación',
+        },
+      },
+      required: ['appointment_id', 'reason'],
+    },
+  },
+  {
+    name: 'reschedule_appointment',
+    description:
+      'Reagenda una cita a una nueva fecha/hora. La cita anterior se marca como "rescheduled". ' +
+      'Confirmar la nueva fecha con el paciente antes de ejecutar.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        appointment_id: {
+          type: 'string',
+          description: 'ID UUID de la cita a reagendar',
+        },
+        new_starts_at: {
+          type: 'string',
+          description: 'Nueva fecha y hora en formato ISO 8601 con timezone (ej: 2026-02-16T10:00:00-05:00)',
+        },
+      },
+      required: ['appointment_id', 'new_starts_at'],
+    },
+  },
+  {
+    name: 'escalate_to_human',
+    description:
+      'Escala la conversación a un humano del consultorio. Usar cuando: ' +
+      '1. El paciente pide hablar con alguien (después de 1 intento de retención) ' +
+      '2. Emergencia médica (después de dar instrucciones del 123) ' +
+      '3. Ideación suicida (después de dar Línea 106) ' +
+      '4. Tema que no puedes resolver',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        reason: {
+          type: 'string',
+          description: 'Por qué se escala (para que el humano tenga contexto)',
+        },
+        urgency: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'emergency'],
+          description: 'Nivel de urgencia. emergency = riesgo de vida',
+        },
+      },
+      required: ['reason', 'urgency'],
+    },
+  },
+  {
+    name: 'add_to_waitlist',
+    description:
+      'Agrega al paciente a la lista de espera cuando NO hay disponibilidad. ' +
+      'Si se cancela una cita, el sistema notifica automáticamente al siguiente en la lista. ' +
+      'Úsala después de verificar disponibilidad y no encontrar horarios.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        doctor_id: {
+          type: 'string',
+          description: 'ID UUID del doctor',
+        },
+        patient_phone: {
+          type: 'string',
+          description: 'Teléfono del paciente con código de país',
+        },
+        preferred_dates: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Fechas preferidas en formato YYYY-MM-DD',
+        },
+        preferred_time: {
+          type: 'string',
+          enum: ['morning', 'afternoon', 'any'],
+          description: 'Preferencia de horario: mañana, tarde, o cualquiera',
+        },
+        reason: {
+          type: 'string',
+          description: 'Motivo de consulta',
+        },
+      },
+      required: ['doctor_id', 'patient_phone'],
+    },
+  },
+]
