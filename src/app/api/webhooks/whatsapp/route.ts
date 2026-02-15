@@ -3,8 +3,8 @@
 //
 // FLUJO COMPLETO:
 // 1. Meta/WhatsApp envía un POST con el mensaje del paciente
-// 2. Respondemos 200 inmediatamente (Meta exige respuesta rápida)
-// 3. En background (waitUntil) procesamos el mensaje:
+// 2. Procesamos el mensaje completo (Claude + DB + WhatsApp)
+// 3. Respondemos 200 al terminar
 //    a. Validar payload
 //    b. Identificar clínica por whatsapp_phone_id
 //    c. Buscar o crear paciente
@@ -25,6 +25,10 @@ import { runAppointmentAgent } from '@/agents/appointment-agent'
 import { normalizePhone } from '@/lib/utils/dates'
 import { whatsappWebhookSchema } from '@/lib/validators/whatsapp'
 import type { Clinic, Doctor, Conversation, Patient, Message } from '@/types/database'
+
+// Máximo tiempo de ejecución en Vercel (en segundos)
+// El plan gratuito de Vercel permite hasta 60s para serverless functions
+export const maxDuration = 30
 
 // ============================================================
 // GET — Verificación del webhook (Meta lo llama UNA vez al configurar)
@@ -50,7 +54,8 @@ export async function GET(request: NextRequest) {
 
 // ============================================================
 // POST — Recibe mensajes de WhatsApp
-// Respondemos 200 inmediato y procesamos en background
+// Procesamos el mensaje ANTES de responder 200
+// Meta permite hasta 15 segundos, Claude responde en ~2-3s
 // ============================================================
 export async function POST(request: NextRequest) {
   // 1. Leer el body
@@ -61,31 +66,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'JSON inválido' }, { status: 400 })
   }
 
-  // 2. Responder 200 inmediato (Meta requiere respuesta en <5 segundos)
-  //    El procesamiento real ocurre en background con waitUntil
-  const response = NextResponse.json({ status: 'received' }, { status: 200 })
-
-  // 3. Procesar en background — no bloqueamos la respuesta HTTP
-  //    waitUntil permite que el código siga corriendo después de enviar el 200
+  // 2. Procesar el mensaje completo antes de responder
+  //    Esto garantiza que el código se ejecuta en Vercel
   try {
-    // @ts-expect-error — waitUntil existe en el runtime de Vercel/Edge
-    const waitUntilFn = globalThis[Symbol.for('next.waitUntil')] ?? (request as unknown as { waitUntil?: (p: Promise<void>) => void }).waitUntil
-    if (typeof waitUntilFn === 'function') {
-      waitUntilFn(processWebhook(body))
-    } else {
-      // Fallback: si no hay waitUntil (dev local), procesar directamente
-      processWebhook(body).catch((err) =>
-        console.error('[Webhook] Error en procesamiento:', err)
-      )
-    }
-  } catch {
-    // Si falla el setup de waitUntil, procesar de todas formas
-    processWebhook(body).catch((err) =>
-      console.error('[Webhook] Error en procesamiento:', err)
-    )
+    await processWebhook(body)
+  } catch (error) {
+    console.error('[Webhook] Error en procesamiento:', error)
   }
 
-  return response
+  // 3. Responder 200 (Meta acepta hasta 15s de espera)
+  return NextResponse.json({ status: 'received' }, { status: 200 })
 }
 
 // ============================================================
