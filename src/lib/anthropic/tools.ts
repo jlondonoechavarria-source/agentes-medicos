@@ -42,8 +42,9 @@ export const agentTools: Tool[] = [
   {
     name: 'create_appointment',
     description:
-      'Crea una cita nueva. SOLO usar DESPUÉS de que el paciente confirme fecha y hora. ' +
-      'NUNCA agendar sin confirmación explícita del paciente. ' +
+      'Crea una cita nueva. SOLO usar DESPUÉS de que el paciente confirme fecha y hora, ' +
+      'Y haya proporcionado su nombre completo, fecha de nacimiento, tipo y número de documento. ' +
+      'NUNCA agendar sin estos datos y sin confirmación explícita del paciente. ' +
       'Ejemplo: paciente dice "sí, dale" o "perfecto, agéndame".',
     input_schema: {
       type: 'object' as const,
@@ -64,12 +65,25 @@ export const agentTools: Tool[] = [
           type: 'string',
           description: 'Fecha y hora de inicio en formato ISO 8601 con timezone America/Bogota (ej: 2026-02-15T14:00:00-05:00)',
         },
+        date_of_birth: {
+          type: 'string',
+          description: 'Fecha de nacimiento del paciente en formato YYYY-MM-DD (ej: 1990-03-15)',
+        },
+        document_type: {
+          type: 'string',
+          enum: ['CC', 'TI', 'CE', 'PP'],
+          description: 'Tipo de documento: CC (Cédula), TI (Tarjeta Identidad), CE (Cédula Extranjería), PP (Pasaporte)',
+        },
+        document_number: {
+          type: 'string',
+          description: 'Número de documento de identidad',
+        },
         reason: {
           type: 'string',
           description: 'Motivo de la consulta (opcional)',
         },
       },
-      required: ['doctor_id', 'patient_name', 'patient_phone', 'starts_at'],
+      required: ['doctor_id', 'patient_name', 'patient_phone', 'starts_at', 'date_of_birth', 'document_type', 'document_number'],
     },
   },
   {

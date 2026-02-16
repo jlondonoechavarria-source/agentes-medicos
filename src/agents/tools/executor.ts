@@ -214,6 +214,9 @@ async function createAppointment(
   const patientPhone = normalizePhone(input.patient_phone as string)
   const startsAt = input.starts_at as string
   const reason = (input.reason as string) ?? null
+  const dateOfBirth = (input.date_of_birth as string) ?? null
+  const documentType = (input.document_type as string) ?? null
+  const documentNumber = (input.document_number as string) ?? null
 
   // Calcular hora de fin
   const endsAt = calculateEndTime(startsAt, clinic.consultation_duration_minutes)
@@ -251,6 +254,9 @@ async function createAppointment(
         clinic_id: clinicId,
         name: patientName,
         phone: patientPhone,
+        date_of_birth: dateOfBirth,
+        document_type: documentType,
+        document_number: documentNumber,
       })
       .select('id')
       .single()
@@ -260,6 +266,17 @@ async function createAppointment(
       return { success: false, error: 'Error registrando al paciente' }
     }
     patient = newPatient
+  } else {
+    // Si el paciente ya existe, actualizar sus datos de documento y nacimiento
+    await supabaseAdmin
+      .from('patients')
+      .update({
+        name: patientName,
+        ...(dateOfBirth && { date_of_birth: dateOfBirth }),
+        ...(documentType && { document_type: documentType }),
+        ...(documentNumber && { document_number: documentNumber }),
+      })
+      .eq('id', patient.id)
   }
 
   // Crear la cita
