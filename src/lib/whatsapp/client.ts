@@ -24,9 +24,6 @@ function getConfig() {
  * @param to - Número del paciente SIN el "+" (ej: "573101112233")
  * @param message - Texto del mensaje (máx 4096 caracteres)
  * @returns ID del mensaje enviado o null si falló
- *
- * NOTA: WhatsApp tiene límite de 4096 caracteres por mensaje.
- * El agente ya está configurado para responder breve (3-4 líneas).
  */
 export async function sendWhatsAppMessage(
   to: string,
@@ -46,6 +43,8 @@ export async function sendWhatsAppMessage(
     text: { body: truncatedMessage },
   }
 
+  console.log(`[WhatsApp] Enviando mensaje a: ${to.slice(0, 5)}***`)
+
   try {
     const response = await fetch(
       `${WHATSAPP_API_URL}/${phoneNumberId}/messages`,
@@ -59,17 +58,35 @@ export async function sendWhatsAppMessage(
       }
     )
 
+    const responseBody = await response.json()
+
     if (!response.ok) {
-      const error = await response.json()
-      console.error('[WhatsApp] Error enviando mensaje:', JSON.stringify(error))
+      const errorCode = responseBody?.error?.code
+      const errorMessage = responseBody?.error?.message ?? 'Error desconocido'
+
+      // Logging detallado por tipo de error
+      if (errorCode === 190) {
+        console.error(`[WhatsApp] TOKEN EXPIRADO (code ${errorCode}): ${errorMessage}`)
+        console.error('[WhatsApp] → Regenera el token en developers.facebook.com > WhatsApp > API Setup')
+      } else if (errorCode === 131030) {
+        console.error(`[WhatsApp] NÚMERO NO AUTORIZADO (code ${errorCode}): ${errorMessage}`)
+        console.error('[WhatsApp] → Agrega el número en developers.facebook.com > WhatsApp > API Setup > "To" phone number')
+      } else if (errorCode === 131047) {
+        console.error(`[WhatsApp] FUERA DE VENTANA 24H (code ${errorCode}): ${errorMessage}`)
+        console.error('[WhatsApp] → El paciente no ha escrito en las últimas 24h. Usa un template aprobado.')
+      } else {
+        console.error(`[WhatsApp] ERROR ${response.status} (code ${errorCode}): ${errorMessage}`)
+        console.error('[WhatsApp] Response completa:', JSON.stringify(responseBody))
+      }
+
       return null
     }
 
-    const data = await response.json()
-    // Meta devuelve el ID del mensaje enviado
-    return data.messages?.[0]?.id ?? null
+    const messageId = responseBody.messages?.[0]?.id ?? null
+    console.log(`[WhatsApp] Mensaje enviado OK. ID: ${messageId}`)
+    return messageId
   } catch (error) {
-    console.error('[WhatsApp] Error de red:', error)
+    console.error('[WhatsApp] Error de red (no se pudo conectar a Meta):', error)
     return null
   }
 }
@@ -77,8 +94,6 @@ export async function sendWhatsAppMessage(
 /**
  * Marca un mensaje como leído (los dos checks azules ✓✓)
  * @param messageId - ID del mensaje recibido de WhatsApp
- *
- * Esto le indica al paciente que su mensaje fue procesado.
  */
 export async function markAsRead(messageId: string): Promise<void> {
   const { phoneNumberId, accessToken } = getConfig()
@@ -100,7 +115,6 @@ export async function markAsRead(messageId: string): Promise<void> {
       }
     )
   } catch (error) {
-    // No es crítico si falla — el paciente simplemente no ve los checks azules
     console.error('[WhatsApp] Error marcando como leído:', error)
   }
 }

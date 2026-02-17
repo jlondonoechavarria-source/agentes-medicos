@@ -97,11 +97,16 @@ async function processWebhook(body: unknown): Promise<void> {
       const { value } = change
 
       // Ignorar actualizaciones de estado (delivered, read, etc.)
-      if (!value.messages || value.messages.length === 0) continue
+      if (!value.messages || value.messages.length === 0) {
+        console.log('[Webhook] Sin mensajes (probablemente status update), ignorando')
+        continue
+      }
 
       const message = value.messages[0]
       const contact = value.contacts?.[0]
       const phoneNumberId = value.metadata.phone_number_id
+
+      console.log(`[Webhook] Mensaje recibido — tipo: ${message.type}, de: ${message.from.slice(0, 5)}***, phone_id: ${phoneNumberId}`)
 
       // 3. Identificar la clínica por el phone_number_id de WhatsApp
       const clinic = await findClinicByPhoneId(phoneNumberId)
@@ -109,6 +114,7 @@ async function processWebhook(body: unknown): Promise<void> {
         console.error(`[Webhook] Clínica no encontrada para phone_id: ${phoneNumberId}`)
         return
       }
+      console.log(`[Webhook] Clínica: ${clinic.name}`)
 
       // 4. Obtener el doctor principal (el primero activo)
       const doctor = await findMainDoctor(clinic.id)
@@ -123,6 +129,7 @@ async function processWebhook(body: unknown): Promise<void> {
       // 6. Normalizar teléfono del paciente
       const patientPhone = normalizePhone(message.from)
       const patientName = contact?.profile?.name ?? 'Paciente'
+      console.log(`[Webhook] Paciente: ${patientName}, tel: ${patientPhone.slice(0, 6)}***`)
 
       // 7. Verificar tipo de mensaje
       if (!isSupportedMessageType(message.type)) {
@@ -168,8 +175,10 @@ async function processWebhook(body: unknown): Promise<void> {
 
       // 16. Cargar historial de mensajes para dar contexto a Claude
       const messageHistory = await getMessageHistory(conversation.id)
+      console.log(`[Webhook] Historial cargado: ${messageHistory.length} mensajes`)
 
       // 17. Ejecutar el agente de IA
+      console.log(`[Webhook] Ejecutando agente con mensaje: "${sanitizedText.slice(0, 50)}..."`)
       const agentResponse = await runAppointmentAgent({
         patientMessage: sanitizedText,
         messageHistory,
@@ -178,12 +187,17 @@ async function processWebhook(body: unknown): Promise<void> {
         patientPhone,
         patientName: patient.name,
       })
+      console.log(`[Webhook] Agente respondió. Tools usadas: [${agentResponse.toolsUsed.join(', ')}]`)
+      console.log(`[Webhook] Respuesta: "${agentResponse.text.slice(0, 100)}..."`)
 
       // 18. Guardar respuesta del agente en DB
       await saveMessage(conversation.id, 'agent', agentResponse.text)
 
       // 19. Enviar respuesta por WhatsApp
-      await sendWhatsAppMessage(message.from, agentResponse.text)
+      const sendResult = await sendWhatsAppMessage(message.from, agentResponse.text)
+      if (!sendResult) {
+        console.error('[Webhook] FALLÓ el envío por WhatsApp — la respuesta se guardó en DB pero el paciente no la recibió')
+      }
 
       // 20. Si se escaló, marcar la conversación
       if (agentResponse.toolsUsed.includes('escalate_to_human')) {
