@@ -1,0 +1,143 @@
+// ============================================================
+// CRON JOB: Reporte matutino para el doctor (6am Colombia)
+// Se ejecuta a las 11:00 UTC = 6:00 AM Colombia
+//
+// Envía por WhatsApp al doctor:
+// - Resumen de citas del día
+// - Pacientes en riesgo de no-show (probabilidad > 40%)
+// - Recomendación de overbooking si aplica
+//
+// Schedule: "0 11 * * *" (6am Colombia)
+// ============================================================
+
+import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { sendWhatsAppMessage } from '@/lib/whatsapp/client'
+import { formatTimeForPatient, nowColombia } from '@/lib/utils/dates'
+import { calculateDailyNoShowRisk, calculateNoShowProbability } from '@/lib/utils/noshow'
+import { format } from 'date-fns'
+
+// Máximo tiempo de ejecución
+export const maxDuration = 30
+
+export async function GET(request: NextRequest) {
+  // Verificar autorización
+  const authHeader = request.headers.get('authorization')
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+  }
+
+  console.log('[Cron:MorningReport] Generando reporte matutino...')
+
+  try {
+    // Obtener todas las clínicas activas
+    const { data: clinics } = await supabaseAdmin
+      .from('clinics')
+      .select('id, name')
+      .in('subscription_status', ['trial', 'active'])
+
+    let reportsSent = 0
+
+    for (const clinic of clinics ?? []) {
+      await generateAndSendReport(clinic.id, clinic.name)
+      reportsSent++
+    }
+
+    console.log(`[Cron:MorningReport] Completado — ${reportsSent} reportes enviados`)
+    return NextResponse.json({ status: 'ok', reportsSent })
+  } catch (error) {
+    console.error('[Cron:MorningReport] Error:', error)
+    return NextResponse.json({ error: 'Error interno' }, { status: 500 })
+  }
+}
+
+async function generateAndSendReport(clinicId: string, clinicName: string): Promise<void> {
+  // Obtener doctor principal
+  const { data: doctor } = await supabaseAdmin
+    .from('doctors')
+    .select('id, name, phone')
+    .eq('clinic_id', clinicId)
+    .eq('is_active', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .single()
+
+  if (!doctor || !doctor.phone) {
+    console.warn(`[Cron:MorningReport] Doctor sin teléfono en clínica ${clinicId}`)
+    return
+  }
+
+  // Fecha de hoy en Colombia
+  const today = format(nowColombia(), 'yyyy-MM-dd')
+
+  // Recalcular probabilidad de no-show para pacientes con citas hoy
+  const { data: todayAppointments } = await supabaseAdmin
+    .from('appointments')
+    .select('patient_id')
+    .eq('clinic_id', clinicId)
+    .in('status', ['confirmed', 'rescheduled'])
+    .gte('starts_at', `${today}T00:00:00-05:00`)
+    .lte('starts_at', `${today}T23:59:59-05:00`)
+
+  for (const apt of todayAppointments ?? []) {
+    await calculateNoShowProbability(apt.patient_id, clinicId)
+  }
+
+  // Calcular riesgo del día
+  const dailyRisk = await calculateDailyNoShowRisk(clinicId, today)
+
+  if (dailyRisk.totalAppointments === 0) {
+    // No hay citas hoy, enviar mensaje corto
+    const noAptsMessage = `☀️ Buenos días, ${doctor.name}.\n\nNo tienes citas agendadas para hoy. ¡Buen día!`
+    const whatsappNumber = doctor.phone.replace('+', '')
+    await sendWhatsAppMessage(whatsappNumber, noAptsMessage)
+    return
+  }
+
+  // Construir el reporte
+  let report = `☀️ Buenos días, ${doctor.name}\n`
+  report += `📊 Reporte del día — ${clinicName}\n\n`
+  report += `📋 Tienes ${dailyRisk.totalAppointments} cita${dailyRisk.totalAppointments > 1 ? 's' : ''} hoy:\n\n`
+
+  // Lista de citas con semáforo
+  for (const patient of dailyRisk.patients) {
+    const time = formatTimeForPatient(patient.startsAt)
+    let indicator: string
+
+    if (patient.reminderConfirmed === true) {
+      indicator = '🟢' // Confirmó
+    } else if (patient.probability > 40) {
+      indicator = '🔴' // Alto riesgo
+    } else {
+      indicator = '🟡' // No ha respondido
+    }
+
+    report += `${indicator} ${time} — ${patient.name}`
+    if (patient.probability > 40) {
+      report += ` ⚠️ ${patient.probability}% riesgo no-show`
+    }
+    report += '\n'
+  }
+
+  // Pacientes en riesgo
+  const atRisk = dailyRisk.patients.filter((p) => p.probability > 40)
+  if (atRisk.length > 0) {
+    report += `\n⚠️ ${atRisk.length} paciente${atRisk.length > 1 ? 's' : ''} con riesgo alto de no-show\n`
+  }
+
+  // Recomendación de overbooking
+  if (dailyRisk.recommendOverbooking) {
+    report += `\n📈 Basado en el historial, se esperan ~${dailyRisk.expectedNoShows} no-show${dailyRisk.expectedNoShows > 1 ? 's' : ''} hoy.`
+    report += ` Recomendamos abrir 1 slot adicional.`
+    report += `\n¿Deseas abrirlo? Responde "Abrir slot" para confirmar.`
+  }
+
+  // Leyenda
+  report += `\n\n🟢 Confirmó  🟡 Pendiente  🔴 Alto riesgo`
+
+  // Enviar al doctor
+  const whatsappNumber = doctor.phone.replace('+', '')
+  await sendWhatsAppMessage(whatsappNumber, report)
+
+  console.log(`[Cron:MorningReport] Reporte enviado a ${doctor.name}`)
+}

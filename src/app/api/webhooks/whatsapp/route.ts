@@ -167,6 +167,12 @@ async function processWebhook(body: unknown): Promise<void> {
         return
       }
 
+      // 14.5. Detectar respuesta a recordatorio ("sí"/"no" a confirmación de cita)
+      const reminderHandled = await handleReminderResponse(
+        sanitizedText, patient.id, clinic.id, message.from, conversation.id
+      )
+      if (reminderHandled) return
+
       // 15. Si es paciente nuevo (sin consentimiento) → enviar aviso de privacidad
       if (!patient.data_consent_at) {
         await handleNewPatient(clinic, patient, message.from, conversation.id)
@@ -434,4 +440,87 @@ async function handleNewPatient(
 
   await sendWhatsAppMessage(whatsappFrom, welcome)
   await saveMessage(conversationId, 'agent', welcome)
+}
+
+/**
+ * Detecta si el paciente está respondiendo a un recordatorio de cita
+ * Busca citas con recordatorio enviado pero sin confirmar
+ * Si el mensaje es "sí"/"no", procesa la confirmación
+ * @returns true si se manejó como respuesta a recordatorio
+ */
+async function handleReminderResponse(
+  messageText: string,
+  patientId: string,
+  clinicId: string,
+  whatsappFrom: string,
+  conversationId: string
+): Promise<boolean> {
+  // Normalizar respuesta
+  const normalized = messageText.toLowerCase().trim()
+
+  // Solo procesar si parece una respuesta de confirmación
+  const isConfirmation = /^(s[ií]|si|yes|confirmo|confirmar|dale|claro|ok|listo)$/i.test(normalized)
+  const isCancellation = /^(no|cancelar|cancelo|no puedo)$/i.test(normalized)
+
+  if (!isConfirmation && !isCancellation) return false
+
+  // Buscar citas con recordatorio enviado pero sin confirmar
+  const { data: pendingAppointment } = await supabaseAdmin
+    .from('appointments')
+    .select('id, starts_at')
+    .eq('clinic_id', clinicId)
+    .eq('patient_id', patientId)
+    .eq('reminder_24h_sent', true)
+    .is('reminder_confirmed', null)
+    .in('status', ['confirmed', 'rescheduled'])
+    .gte('starts_at', new Date().toISOString())
+    .order('starts_at', { ascending: true })
+    .limit(1)
+    .single()
+
+  if (!pendingAppointment) return false // No hay recordatorio pendiente
+
+  if (isConfirmation) {
+    // Marcar como confirmada
+    await supabaseAdmin
+      .from('appointments')
+      .update({ reminder_confirmed: true, confirmation_received: true })
+      .eq('id', pendingAppointment.id)
+
+    await supabaseAdmin
+      .from('reminders')
+      .update({ response: 'confirmed', confirmed_at: new Date().toISOString() })
+      .eq('appointment_id', pendingAppointment.id)
+      .eq('type', '24h')
+
+    const response = '✅ ¡Perfecto, tu cita está confirmada! Te esperamos. Si necesitas algo más, escríbeme.'
+    await saveMessage(conversationId, 'agent', response)
+    await sendWhatsAppMessage(whatsappFrom, response)
+
+    console.log(`[Webhook] Recordatorio CONFIRMADO para cita ${pendingAppointment.id}`)
+  } else {
+    // Marcar como no confirmada
+    await supabaseAdmin
+      .from('appointments')
+      .update({ reminder_confirmed: false })
+      .eq('id', pendingAppointment.id)
+
+    await supabaseAdmin
+      .from('reminders')
+      .update({ response: 'cancelled' })
+      .eq('appointment_id', pendingAppointment.id)
+      .eq('type', '24h')
+
+    const response = '😔 Entendido. ¿Te gustaría reagendar tu cita para otro día? Escríbeme la fecha que prefieras.'
+    await saveMessage(conversationId, 'agent', response)
+    await sendWhatsAppMessage(whatsappFrom, response)
+
+    console.log(`[Webhook] Recordatorio RECHAZADO para cita ${pendingAppointment.id}`)
+  }
+
+  // Recalcular probabilidad de no-show
+  const { calculateNoShowProbability } = await import('@/lib/utils/noshow')
+  await calculateNoShowProbability(patientId, clinicId)
+
+  return true
 }
