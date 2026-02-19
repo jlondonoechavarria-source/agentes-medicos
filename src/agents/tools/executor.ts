@@ -12,6 +12,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { calculateEndTime, formatForPatient, formatTimeForPatient, normalizePhone, getDayOfWeek } from '@/lib/utils/dates'
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client'
+import { syncClinicSheet } from '@/lib/google-sheets'
 import type { Clinic, Doctor, WorkingDay } from '@/types/database'
 import { parseISO, addMinutes, format, startOfDay, endOfDay, isValid } from 'date-fns'
 import { toZonedTime } from 'date-fns-tz'
@@ -321,6 +322,9 @@ async function createAppointment(
       })
   } catch { /* no crítico */ }
 
+  // Sync Google Sheets (no crítico, fire-and-forget)
+  try { syncClinicSheet(clinicId, ['appointments', 'patients']) } catch { /* no crítico */ }
+
   return {
     success: true,
     data: {
@@ -446,6 +450,9 @@ async function cancelAppointment(
       })
   } catch { /* no crítico */ }
 
+  // Sync Google Sheets (no crítico, fire-and-forget)
+  try { syncClinicSheet(clinicId, ['appointments', 'finances', 'noshow_stats']) } catch { /* no crítico */ }
+
   // Revisar si hay alguien en lista de espera para ese doctor
   await notifyWaitlist(clinicId, appointment.doctor_id, appointment.starts_at)
 
@@ -544,6 +551,9 @@ async function rescheduleAppointment(
         },
       })
   } catch { /* no crítico */ }
+
+  // Sync Google Sheets (no crítico, fire-and-forget)
+  try { syncClinicSheet(clinicId, ['appointments']) } catch { /* no crítico */ }
 
   // Revisar waitlist para el horario liberado
   await notifyWaitlist(clinicId, appointment.doctor_id, appointment.starts_at)

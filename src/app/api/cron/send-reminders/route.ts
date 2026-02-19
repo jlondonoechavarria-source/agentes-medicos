@@ -11,6 +11,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client'
 import { formatDateForPatient, formatTimeForPatient } from '@/lib/utils/dates'
 import { calculateNoShowProbability } from '@/lib/utils/noshow'
+import { syncClinicSheet } from '@/lib/google-sheets'
 
 // Máximo tiempo de ejecución
 export const maxDuration = 30
@@ -165,5 +166,11 @@ async function markUnconfirmedAppointments(): Promise<void> {
 
   if ((unconfirmed?.length ?? 0) > 0) {
     console.log(`[Cron:Reminders] ${unconfirmed?.length} citas marcadas como no confirmadas`)
+
+    // Sync Google Sheets para clínicas afectadas
+    const affectedClinicIds = new Set((unconfirmed ?? []).map(a => a.clinic_id))
+    for (const cId of affectedClinicIds) {
+      try { syncClinicSheet(cId, ['appointments', 'patients', 'finances', 'noshow_stats']) } catch { /* no crítico */ }
+    }
   }
 }

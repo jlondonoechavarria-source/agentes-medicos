@@ -48,6 +48,8 @@ export interface Clinic {
   subscription_status: 'trial' | 'active' | 'cancelled' | 'expired'
   subscription_plan: 'basic' | 'pro'
   trial_ends_at: string | null             // ISO 8601
+  google_sheet_id: string | null           // ID de Google Sheets vinculado
+  doctor_email: string | null              // Email del doctor para compartir Sheet
   created_at: string
   updated_at: string
 }

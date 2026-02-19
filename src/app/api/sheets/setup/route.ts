@@ -1,0 +1,72 @@
+// ============================================================
+// API: Crear y vincular Google Sheet a una clínica
+// POST /api/sheets/setup { clinicId: "uuid" }
+//
+// Protegido con CRON_SECRET (para MVP lo llama el developer)
+// ============================================================
+
+import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { createClinicSheet, syncClinicSheet } from '@/lib/google-sheets'
+
+export const maxDuration = 30
+
+export async function POST(request: NextRequest) {
+  // Verificar autorización
+  const authHeader = request.headers.get('authorization')
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+  }
+
+  try {
+    const { clinicId } = await request.json()
+
+    if (!clinicId) {
+      return NextResponse.json({ error: 'clinicId es requerido' }, { status: 400 })
+    }
+
+    // 1. Obtener datos de la clínica
+    const { data: clinic } = await supabaseAdmin
+      .from('clinics')
+      .select('id, name, google_sheet_id, doctor_email')
+      .eq('id', clinicId)
+      .single()
+
+    if (!clinic) {
+      return NextResponse.json({ error: 'Clínica no encontrada' }, { status: 404 })
+    }
+
+    if (clinic.google_sheet_id) {
+      return NextResponse.json({
+        error: 'Ya tiene hoja vinculada',
+        sheetId: clinic.google_sheet_id,
+        url: `https://docs.google.com/spreadsheets/d/${clinic.google_sheet_id}`,
+      }, { status: 409 })
+    }
+
+    // 2. Crear la hoja de Google Sheets
+    console.log(`[Sheets:Setup] Creando hoja para ${clinic.name}...`)
+    const sheetId = await createClinicSheet(clinic.name, clinic.doctor_email ?? undefined)
+
+    // 3. Guardar el ID en la DB
+    await supabaseAdmin
+      .from('clinics')
+      .update({ google_sheet_id: sheetId })
+      .eq('id', clinicId)
+
+    // 4. Sync inicial con todos los datos existentes
+    console.log(`[Sheets:Setup] Sincronizando datos iniciales...`)
+    await syncClinicSheet(clinicId, ['patients', 'appointments', 'finances', 'noshow_stats'])
+
+    console.log(`[Sheets:Setup] Hoja creada y sincronizada para ${clinic.name}`)
+
+    return NextResponse.json({
+      status: 'ok',
+      sheetId,
+      url: `https://docs.google.com/spreadsheets/d/${sheetId}`,
+    })
+  } catch (error) {
+    console.error('[Sheets:Setup] Error:', error)
+    return NextResponse.json({ error: 'Error creando hoja' }, { status: 500 })
+  }
+}

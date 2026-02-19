@@ -23,6 +23,7 @@ import { sendWhatsAppMessage, markAsRead } from '@/lib/whatsapp/client'
 import { sanitizePatientMessage, isSupportedMessageType, getUnsupportedTypeMessage } from '@/lib/whatsapp/sanitize'
 import { runAppointmentAgent } from '@/agents/appointment-agent'
 import { normalizePhone } from '@/lib/utils/dates'
+import { syncClinicSheet } from '@/lib/google-sheets'
 import { whatsappWebhookSchema } from '@/lib/validators/whatsapp'
 import type { Clinic, Doctor, Conversation, Patient, Message } from '@/types/database'
 
@@ -171,7 +172,11 @@ async function processWebhook(body: unknown): Promise<void> {
       const reminderHandled = await handleReminderResponse(
         sanitizedText, patient.id, clinic.id, message.from, conversation.id
       )
-      if (reminderHandled) return
+      if (reminderHandled) {
+        // Sync Google Sheets tras respuesta a recordatorio
+        try { syncClinicSheet(clinic.id, ['appointments']) } catch { /* no crítico */ }
+        return
+      }
 
       // 15. Si es paciente nuevo (sin consentimiento) → enviar aviso de privacidad
       if (!patient.data_consent_at) {
