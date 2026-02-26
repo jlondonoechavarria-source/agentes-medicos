@@ -153,22 +153,28 @@ async function processWebhook(body: unknown): Promise<void> {
       // 11. Buscar o crear conversación
       const conversation = await findOrCreateConversation(clinic.id, patient.id, patientPhone)
 
-      // 12. Guardar mensaje del paciente en DB
+      // 12. Cargar historial ANTES de guardar el mensaje actual
+      //     Si cargamos después, el mensaje que acabamos de recibir ya estaría en DB
+      //     y llegaría duplicado a Claude (una vez del historial, otra del push explícito)
+      const messageHistory = await getMessageHistory(conversation.id)
+      console.log(`[Webhook] Historial cargado: ${messageHistory.length} mensajes`)
+
+      // 13. Guardar mensaje del paciente en DB (después de cargar historial)
       await saveMessage(conversation.id, 'patient', sanitizedText, message.id)
 
-      // 13. Actualizar último mensaje de la conversación
+      // 14. Actualizar último mensaje de la conversación
       await supabaseAdmin
         .from('conversations')
         .update({ last_message_at: new Date().toISOString() })
         .eq('id', conversation.id)
 
-      // 14. Si la conversación está escalada → no responder (un humano se encarga)
+      // 15. Si la conversación está escalada → no responder (un humano se encarga)
       if (conversation.status === 'escalated') {
         console.log(`[Webhook] Conversación escalada, no responder. ID: ${conversation.id}`)
         return
       }
 
-      // 14.5. Detectar respuesta a recordatorio ("sí"/"no" a confirmación de cita)
+      // 15.5. Detectar respuesta a recordatorio ("sí"/"no" a confirmación de cita)
       const reminderHandled = await handleReminderResponse(
         sanitizedText, patient.id, clinic.id, message.from, conversation.id
       )
@@ -178,18 +184,15 @@ async function processWebhook(body: unknown): Promise<void> {
         return
       }
 
-      // 15. Si es paciente nuevo (sin consentimiento) → enviar aviso de privacidad
+      // 16. Si es paciente nuevo (sin consentimiento) → enviar aviso de privacidad
       if (!patient.data_consent_at) {
         await handleNewPatient(clinic, patient, message.from, conversation.id)
         return
       }
 
-      // 16. Cargar historial de mensajes para dar contexto a Claude
-      const messageHistory = await getMessageHistory(conversation.id)
-      console.log(`[Webhook] Historial cargado: ${messageHistory.length} mensajes`)
-
       // 17. Ejecutar el agente de IA
       console.log(`[Webhook] Ejecutando agente con mensaje: "${sanitizedText.slice(0, 50)}..."`)
+
       const agentResponse = await runAppointmentAgent({
         patientMessage: sanitizedText,
         messageHistory,
@@ -391,13 +394,17 @@ async function saveMessage(
 
 /**
  * Carga los últimos 20 mensajes de una conversación (contexto para Claude)
+ *
+ * Ordenamos DESCENDENTE y limitamos a 20 para obtener los MÁS RECIENTES,
+ * luego revertimos al orden cronológico. Si usáramos ascending+limit(20)
+ * obtendríamos los primeros 20 (los más viejos), perdiendo el contexto reciente.
  */
 async function getMessageHistory(conversationId: string): Promise<Message[]> {
   const { data, error } = await supabaseAdmin
     .from('messages')
     .select('*')
     .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false }) // más recientes primero
     .limit(20)
 
   if (error) {
@@ -405,7 +412,8 @@ async function getMessageHistory(conversationId: string): Promise<Message[]> {
     return []
   }
 
-  return (data ?? []) as Message[]
+  // Revertir para que Claude reciba el historial en orden cronológico
+  return ((data ?? []) as Message[]).reverse()
 }
 
 /**

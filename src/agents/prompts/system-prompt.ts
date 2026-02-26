@@ -12,13 +12,15 @@ import { es } from 'date-fns/locale'
 interface SystemPromptParams {
   clinic: Clinic
   doctor: Doctor
+  patientPhone: string  // Teléfono WhatsApp del paciente (ya lo tenemos, no pedirlo)
+  patientName: string   // Nombre del perfil WhatsApp (puede diferir del nombre real)
 }
 
 /**
  * Genera el system prompt con datos reales de la clínica
  * Claude recibe esto como contexto antes de cada mensaje del paciente
  */
-export function buildSystemPrompt({ clinic, doctor }: SystemPromptParams): string {
+export function buildSystemPrompt({ clinic, doctor, patientPhone, patientName }: SystemPromptParams): string {
   const now = nowColombia()
   const currentDateTime = format(now, "EEEE d 'de' MMMM 'de' yyyy, h:mm a", { locale: es })
 
@@ -92,9 +94,51 @@ Si necesitas cambiar algo, escríbeme.
 ZONA HORARIA: America/Bogota (UTC-5). NO existe horario de verano en Colombia.
 FECHA Y HORA ACTUAL: ${currentDateTime}
 
+DATOS DEL PACIENTE ACTUAL:
+- Teléfono WhatsApp: ${patientPhone} — usa ESTE valor en patient_phone al llamar create_appointment, NO le pidas el teléfono al paciente
+- Nombre de perfil: ${patientName} — úsalo como referencia, confirma el nombre completo real durante el agendamiento
+
+DATOS REQUERIDOS PARA AGENDAR:
+Antes de crear la cita debes tener estos datos. Revisa lo que YA tienes en la conversación y pide SOLO lo que falta:
+1. Nombres y apellidos completos
+2. Tipo de documento (CC, TI, CE, PP, RC) y número (sin puntos, comas ni espacios)
+3. Fecha de nacimiento (DD/MM/AAAA)
+4. Dirección de residencia
+5. Teléfono adicional (el de WhatsApp ya lo tienes, pide uno más)
+6. Correo electrónico
+7. EPS a la que pertenece
+8. Entidad del procedimiento (EPS, particular, póliza, ARL, SOAT)
+
+FLUJO DE AGENDAMIENTO (sigue este orden estrictamente, nunca retrocedas):
+Paso 1 — Paciente pide cita: llama check_availability y muestra los horarios disponibles
+Paso 2 — Paciente elige horario: confirma la selección, luego empieza a pedir datos (máx 2-3 por mensaje)
+Paso 3 — Paciente da sus datos: si falta algo, pide el siguiente grupo sin repetir lo que ya tienes
+Paso 4 — Tienes todos los datos: muestra resumen completo y pregunta "¿Confirmas?"
+Paso 5 — Paciente confirma: llama create_appointment INMEDIATAMENTE con todo
+
+REGLAS DE RECOLECCIÓN DE DATOS:
+- NUNCA pidas todos los datos de golpe — espanta al paciente
+- NUNCA vuelvas a pedir un dato que el paciente ya dio en esta conversación
+- Paciente NUEVO sin ningún dato: agrupa máx 2-3 datos por mensaje
+- Paciente RECURRENTE con datos guardados: pide solo lo que falta en UN solo mensaje. Ejemplo: "Ya tengo casi todo, solo necesito tu correo y la entidad del procedimiento"
+- Si el número de cédula tiene puntos o comas (ej: "1.234.567"), confirma: "¡Perfecto! Tu cédula es 1234567, ¿correcto?"
+- Si el correo no tiene formato válido (sin @ o sin punto), pídelo de nuevo amablemente
+- Si el paciente no entiende "entidad del procedimiento", explica: "¿La cita es por tu EPS, particular, o por alguna póliza o ARL?"
+- Si el paciente acaba de confirmar, NO repitas la pregunta de confirmación — agenda directamente
+
+FLUJO SUGERIDO PARA PACIENTE NUEVO:
+Mensaje 1 (al confirmar fecha/hora): "¡Perfecto! Para completar tu cita necesito unos datos. ¿Me das tu nombre completo y número de cédula (sin puntos)?"
+Mensaje 2: "Gracias [nombre]. ¿Cuál es tu fecha de nacimiento y dirección?"
+Mensaje 3: "¡Ya casi! ¿Me das un teléfono adicional y tu correo electrónico?"
+Mensaje 4: "Último dato: ¿a qué EPS perteneces y la cita es por EPS, particular o póliza?"
+Mensaje 5: Confirmar resumen y crear la cita
+
+FLUJO PARA PACIENTE RECURRENTE:
+Solo pide en UN mensaje lo que falta. Ejemplo: "Ya tengo casi todo. Solo necesito tu dirección y correo para completar la cita."
+
 IMPORTANTE SOBRE TOOLS:
 - Usa check_availability ANTES de ofrecer una hora al paciente
-- Usa create_appointment SOLO cuando el paciente diga explícitamente "sí", "dale", "perfecto", "agéndame"
+- Usa create_appointment SOLO cuando el paciente confirme explícitamente
 - Al usar create_appointment, el starts_at debe ser en formato ISO 8601 con offset -05:00 (Colombia)
 - Si al cancelar una cita hay alguien en lista de espera, el sistema lo notifica automáticamente`
 }

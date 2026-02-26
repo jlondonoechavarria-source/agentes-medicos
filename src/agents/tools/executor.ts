@@ -218,6 +218,11 @@ async function createAppointment(
   const dateOfBirth = (input.date_of_birth as string) ?? null
   const documentType = (input.document_type as string) ?? null
   const documentNumber = (input.document_number as string) ?? null
+  const patientAddress = (input.patient_address as string) ?? null
+  const patientSecondaryPhone = (input.patient_secondary_phone as string) ?? null
+  const patientEmail = (input.patient_email as string) ?? null
+  const patientEps = (input.patient_eps as string) ?? null
+  const procedureEntity = (input.procedure_entity as string) ?? null
 
   // Calcular hora de fin
   const endsAt = calculateEndTime(startsAt, clinic.consultation_duration_minutes)
@@ -258,6 +263,11 @@ async function createAppointment(
         date_of_birth: dateOfBirth,
         document_type: documentType,
         document_number: documentNumber,
+        ...(patientAddress && { address: patientAddress }),
+        ...(patientSecondaryPhone && { secondary_phone: patientSecondaryPhone }),
+        ...(patientEmail && { email: patientEmail }),
+        ...(patientEps && { eps: patientEps }),
+        ...(procedureEntity && { procedure_entity: procedureEntity }),
       })
       .select('id')
       .single()
@@ -268,7 +278,7 @@ async function createAppointment(
     }
     patient = newPatient
   } else {
-    // Si el paciente ya existe, actualizar sus datos de documento y nacimiento
+    // Si el paciente ya existe, actualizar todos los datos que llegaron
     await supabaseAdmin
       .from('patients')
       .update({
@@ -276,6 +286,11 @@ async function createAppointment(
         ...(dateOfBirth && { date_of_birth: dateOfBirth }),
         ...(documentType && { document_type: documentType }),
         ...(documentNumber && { document_number: documentNumber }),
+        ...(patientAddress && { address: patientAddress }),
+        ...(patientSecondaryPhone && { secondary_phone: patientSecondaryPhone }),
+        ...(patientEmail && { email: patientEmail }),
+        ...(patientEps && { eps: patientEps }),
+        ...(procedureEntity && { procedure_entity: procedureEntity }),
       })
       .eq('id', patient.id)
   }

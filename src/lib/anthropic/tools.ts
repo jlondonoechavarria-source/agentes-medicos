@@ -42,10 +42,9 @@ export const agentTools: Tool[] = [
   {
     name: 'create_appointment',
     description:
-      'Crea una cita nueva. SOLO usar DESPUÉS de que el paciente confirme fecha y hora, ' +
-      'Y haya proporcionado su nombre completo, fecha de nacimiento, tipo y número de documento. ' +
-      'NUNCA agendar sin estos datos y sin confirmación explícita del paciente. ' +
-      'Ejemplo: paciente dice "sí, dale" o "perfecto, agéndame".',
+      'Crea una cita nueva. SOLO usar DESPUÉS de que el paciente confirme fecha y hora ' +
+      'y haya proporcionado todos los datos requeridos. ' +
+      'NUNCA agendar sin confirmación explícita del paciente ("sí, dale", "perfecto", "agéndame").',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -55,7 +54,7 @@ export const agentTools: Tool[] = [
         },
         patient_name: {
           type: 'string',
-          description: 'Nombre completo del paciente',
+          description: 'Nombres y apellidos completos del paciente',
         },
         patient_phone: {
           type: 'string',
@@ -71,12 +70,32 @@ export const agentTools: Tool[] = [
         },
         document_type: {
           type: 'string',
-          enum: ['CC', 'TI', 'CE', 'PP'],
-          description: 'Tipo de documento: CC (Cédula), TI (Tarjeta Identidad), CE (Cédula Extranjería), PP (Pasaporte)',
+          enum: ['CC', 'TI', 'CE', 'PP', 'RC'],
+          description: 'Tipo de documento: CC (Cédula Ciudadanía), TI (Tarjeta Identidad), CE (Cédula Extranjería), PP (Pasaporte), RC (Registro Civil)',
         },
         document_number: {
           type: 'string',
-          description: 'Número de documento de identidad',
+          description: 'Número de documento sin puntos, comas ni espacios (solo dígitos)',
+        },
+        patient_address: {
+          type: 'string',
+          description: 'Dirección de residencia del paciente (opcional)',
+        },
+        patient_secondary_phone: {
+          type: 'string',
+          description: 'Teléfono adicional de contacto, diferente al de WhatsApp (opcional)',
+        },
+        patient_email: {
+          type: 'string',
+          description: 'Correo electrónico del paciente (opcional)',
+        },
+        patient_eps: {
+          type: 'string',
+          description: 'EPS a la que pertenece el paciente (opcional)',
+        },
+        procedure_entity: {
+          type: 'string',
+          description: 'Entidad por la que realiza el procedimiento: EPS, particular, póliza, ARL, SOAT (opcional)',
         },
         reason: {
           type: 'string',

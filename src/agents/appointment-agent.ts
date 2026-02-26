@@ -46,8 +46,8 @@ interface AgentResponse {
 export async function runAppointmentAgent(params: AgentParams): Promise<AgentResponse> {
   const { patientMessage, messageHistory, clinic, doctor, patientPhone, patientName } = params
 
-  // 1. Generar el system prompt con datos reales de la clínica
-  const systemPrompt = buildSystemPrompt({ clinic, doctor })
+  // 1. Generar el system prompt con datos reales de la clínica y del paciente actual
+  const systemPrompt = buildSystemPrompt({ clinic, doctor, patientPhone, patientName })
 
   // 2. Construir el historial de mensajes para Claude
   //    Tomamos los últimos 20 mensajes para dar contexto sin gastar muchos tokens
