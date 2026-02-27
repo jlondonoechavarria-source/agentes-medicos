@@ -1,49 +1,77 @@
 // ============================================================
-// Crea un nuevo Google Sheet para una clínica
-// - 4 pestañas: Pacientes, Citas, Finanzas, Estadísticas No-Show
-// - Headers formateados (negrita + fondo gris + fila congelada)
-// - Comparte con el email del doctor (solo lectura)
+// Configura un Google Sheet existente para una clínica
+//
+// FLUJO:
+// 1. El usuario crea un Google Sheet manualmente en sheets.google.com
+// 2. Lo comparte con la Service Account como Editor
+// 3. Llama a este endpoint con el sheetId
+// 4. Este código crea las 4 pestañas y los headers formateados
+//
+// Por qué no creamos el sheet nosotros: la Service Account no tiene
+// cuota de almacenamiento propia en Drive (es una limitación de Google
+// para cuentas sin Google Workspace).
 // ============================================================
 
 import { getSheetsClient, getDriveClient } from './client'
 
 export async function createClinicSheet(
   clinicName: string,
-  doctorEmail?: string
+  doctorEmail?: string,
+  existingSheetId?: string
 ): Promise<string> {
   const sheets = getSheetsClient()
 
-  // 1. Crear spreadsheet con 4 pestañas
-  const response = await sheets.spreadsheets.create({
-    requestBody: {
-      properties: {
-        title: `${clinicName} — Datos del Agente`,
+  if (!existingSheetId) {
+    throw new Error(
+      'Se requiere un sheetId existente. Crea un Google Sheet manualmente, ' +
+      'compártelo con la Service Account como Editor, y pasa el ID aquí.'
+    )
+  }
+
+  const spreadsheetId = existingSheetId
+
+  // 1. Obtener las pestañas actuales del sheet
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId })
+  const existingSheets = spreadsheet.data.sheets ?? []
+  const existingTitles = existingSheets.map(s => s.properties?.title ?? '')
+
+  // 2. Construir las requests para crear/renombrar las 4 pestañas
+  const tabNames = ['Pacientes', 'Citas', 'Finanzas', 'Estadísticas No-Show']
+  const requests: object[] = []
+
+  // Si solo hay una hoja (la default "Hoja 1" o "Sheet1"), renombrarla
+  if (existingSheets.length === 1) {
+    requests.push({
+      updateSheetProperties: {
+        properties: { sheetId: existingSheets[0].properties?.sheetId, title: 'Pacientes' },
+        fields: 'title',
       },
-      sheets: [
-        { properties: { title: 'Pacientes', index: 0 } },
-        { properties: { title: 'Citas', index: 1 } },
-        { properties: { title: 'Finanzas', index: 2 } },
-        { properties: { title: 'Estadísticas No-Show', index: 3 } },
-      ],
-    },
-  })
+    })
+    // Agregar las otras 3
+    for (const title of ['Citas', 'Finanzas', 'Estadísticas No-Show']) {
+      requests.push({ addSheet: { properties: { title } } })
+    }
+  } else {
+    // Si ya tiene hojas, solo agregar las que faltan
+    for (const title of tabNames) {
+      if (!existingTitles.includes(title)) {
+        requests.push({ addSheet: { properties: { title } } })
+      }
+    }
+  }
 
-  const spreadsheetId = response.data.spreadsheetId!
-  // 1.5 Mover el archivo a la carpeta compartida (CRÍTICO para service accounts)
-const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID
-if (!folderId) {
-  throw new Error('GOOGLE_DRIVE_FOLDER_ID no está configurado')
-}
+  if (requests.length > 0) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests },
+    })
+  }
 
-const drive = getDriveClient()
-await drive.files.update({
-  fileId: spreadsheetId,
-  addParents: folderId,
-  fields: 'id, parents',
-})
-  const sheetIds = response.data.sheets?.map(s => s.properties?.sheetId!) ?? []
+  // 3. Obtener los IDs actualizados de las hojas
+  const updated = await sheets.spreadsheets.get({ spreadsheetId })
+  const sheetIds = updated.data.sheets?.map(s => s.properties?.sheetId!) ?? []
 
-  // 2. Formatear headers: negrita + fondo gris + fila congelada
+  // 4. Formatear headers: negrita + fondo gris + primera fila congelada
   const formatRequests = sheetIds.map(sheetIdNum => ({
     repeatCell: {
       range: { sheetId: sheetIdNum, startRowIndex: 0, endRowIndex: 1 },
@@ -72,7 +100,7 @@ await drive.files.update({
     requestBody: { requests: [...formatRequests, ...freezeRequests] },
   })
 
-  // 3. Compartir con el doctor si tiene email
+  // 5. Compartir con el doctor si tiene email (solo lectura)
   if (doctorEmail) {
     const drive = getDriveClient()
     await drive.permissions.create({

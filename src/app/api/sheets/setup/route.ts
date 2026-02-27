@@ -19,10 +19,16 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { clinicId } = await request.json()
+    const { clinicId, sheetId: providedSheetId } = await request.json()
 
     if (!clinicId) {
       return NextResponse.json({ error: 'clinicId es requerido' }, { status: 400 })
+    }
+
+    if (!providedSheetId) {
+      return NextResponse.json({
+        error: 'sheetId es requerido. Crea un Google Sheet, compártelo con la Service Account como Editor, y envía el ID aquí.',
+      }, { status: 400 })
     }
 
     // 1. Obtener datos de la clínica
@@ -44,9 +50,9 @@ export async function POST(request: NextRequest) {
       }, { status: 409 })
     }
 
-    // 2. Crear la hoja de Google Sheets
-    console.log(`[Sheets:Setup] Creando hoja para ${clinic.name}...`)
-    const sheetId = await createClinicSheet(clinic.name, clinic.doctor_email ?? undefined)
+    // 2. Configurar el sheet existente con las pestañas y formato
+    console.log(`[Sheets:Setup] Configurando hoja para ${clinic.name}...`)
+    const sheetId = await createClinicSheet(clinic.name, clinic.doctor_email ?? undefined, providedSheetId)
 
     // 3. Guardar el ID en la DB
     await supabaseAdmin
