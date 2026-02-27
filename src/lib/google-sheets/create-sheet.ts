@@ -29,6 +29,18 @@ export async function createClinicSheet(
   })
 
   const spreadsheetId = response.data.spreadsheetId!
+  // 1.5 Mover el archivo a la carpeta compartida (CRÍTICO para service accounts)
+const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID
+if (!folderId) {
+  throw new Error('GOOGLE_DRIVE_FOLDER_ID no está configurado')
+}
+
+const drive = getDriveClient()
+await drive.files.update({
+  fileId: spreadsheetId,
+  addParents: folderId,
+  fields: 'id, parents',
+})
   const sheetIds = response.data.sheets?.map(s => s.properties?.sheetId!) ?? []
 
   // 2. Formatear headers: negrita + fondo gris + fila congelada
